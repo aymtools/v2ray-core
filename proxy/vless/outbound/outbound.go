@@ -2,7 +2,7 @@
 
 package outbound
 
-//go:generate errorgen
+//go:generate go run v2ray.com/core/common/errors/errorgen
 
 import (
 	"context"
@@ -39,7 +39,6 @@ type Handler struct {
 
 // New creates a new VLess outbound handler.
 func New(ctx context.Context, config *Config) (*Handler, error) {
-
 	serverList := protocol.NewServerList()
 	for _, rec := range config.Vnext {
 		s, err := protocol.NewServerSpecFromPB(rec)
@@ -60,13 +59,12 @@ func New(ctx context.Context, config *Config) (*Handler, error) {
 }
 
 // Process implements proxy.Outbound.Process().
-func (v *Handler) Process(ctx context.Context, link *transport.Link, dialer internet.Dialer) error {
-
+func (h *Handler) Process(ctx context.Context, link *transport.Link, dialer internet.Dialer) error {
 	var rec *protocol.ServerSpec
 	var conn internet.Connection
 
 	if err := retry.ExponentialBackoff(5, 200).On(func() error {
-		rec = v.serverPicker.PickServer()
+		rec = h.serverPicker.PickServer()
 		var err error
 		conn, err = dialer.Dial(ctx, rec.Destination())
 		if err != nil {
@@ -76,7 +74,7 @@ func (v *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
 	}); err != nil {
 		return newError("failed to find an available destination").Base(err).AtWarning()
 	}
-	defer conn.Close() // nolint: errcheck
+	defer conn.Close()
 
 	outbound := session.OutboundFromContext(ctx)
 	if outbound == nil || !outbound.Target.IsValid() {
@@ -108,12 +106,12 @@ func (v *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
 		Flow: account.Flow,
 	}
 
-	sessionPolicy := v.policyManager.ForLevel(request.User.Level)
+	sessionPolicy := h.policyManager.ForLevel(request.User.Level)
 	ctx, cancel := context.WithCancel(ctx)
 	timer := signal.CancelAfterInactivity(ctx, cancel, sessionPolicy.Timeouts.ConnectionIdle)
 
-	clientReader := link.Reader
-	clientWriter := link.Writer
+	clientReader := link.Reader // .(*pipe.Reader)
+	clientWriter := link.Writer // .(*pipe.Writer)
 
 	postRequest := func() error {
 		defer timer.SetTimeout(sessionPolicy.Timeouts.DownlinkOnly)
@@ -139,22 +137,15 @@ func (v *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
 			return newError("failed to transfer request payload").Base(err).AtInfo()
 		}
 
-		// Indicates the end of request payload.
-		switch requestAddons.Flow {
-		default:
-
-		}
-
 		return nil
 	}
 
 	getResponse := func() error {
 		defer timer.SetTimeout(sessionPolicy.Timeouts.UplinkOnly)
 
-		responseAddons := new(encoding.Addons)
-
-		if err := encoding.DecodeResponseHeader(conn, request, responseAddons); err != nil {
-			return newError("failed to decode response header").Base(err).AtWarning()
+		responseAddons, err := encoding.DecodeResponseHeader(conn, request)
+		if err != nil {
+			return newError("failed to decode response header").Base(err).AtInfo()
 		}
 
 		// default: serverReader := buf.NewReader(conn)

@@ -12,8 +12,6 @@ import (
 	"hash"
 	"hash/fnv"
 	"io"
-	"os"
-	vmessaead "v2ray.com/core/proxy/vmess/aead"
 
 	"golang.org/x/crypto/chacha20poly1305"
 
@@ -25,6 +23,7 @@ import (
 	"v2ray.com/core/common/protocol"
 	"v2ray.com/core/common/serial"
 	"v2ray.com/core/proxy/vmess"
+	vmessaead "v2ray.com/core/proxy/vmess/aead"
 )
 
 func hashTimestamp(h hash.Hash, t protocol.Timestamp) []byte {
@@ -37,6 +36,7 @@ func hashTimestamp(h hash.Hash, t protocol.Timestamp) []byte {
 
 // ClientSession stores connection session info for VMess client.
 type ClientSession struct {
+	isAEAD          bool
 	idHash          protocol.IDHash
 	requestBodyKey  [16]byte
 	requestBodyIV   [16]byte
@@ -44,35 +44,22 @@ type ClientSession struct {
 	responseBodyIV  [16]byte
 	responseReader  io.Reader
 	responseHeader  byte
-
-	isAEADRequest bool
 }
 
 // NewClientSession creates a new ClientSession.
-func NewClientSession(idHash protocol.IDHash, ctx context.Context) *ClientSession {
+func NewClientSession(ctx context.Context, isAEAD bool, idHash protocol.IDHash) *ClientSession {
+	session := &ClientSession{
+		isAEAD: isAEAD,
+		idHash: idHash,
+	}
+
 	randomBytes := make([]byte, 33) // 16 + 16 + 1
 	common.Must2(rand.Read(randomBytes))
-
-	session := &ClientSession{}
-
-	session.isAEADRequest = false
-
-	if ctxValueAlterID := ctx.Value(vmess.AlterID); ctxValueAlterID != nil {
-		if ctxValueAlterID == 0 {
-			session.isAEADRequest = true
-		}
-	}
-
-	if vmessAeadDisable, vmessAeadDisableFound := os.LookupEnv("V2RAY_VMESS_AEAD_DISABLED"); vmessAeadDisableFound {
-		if vmessAeadDisable == "true" {
-			session.isAEADRequest = false
-		}
-	}
-
 	copy(session.requestBodyKey[:], randomBytes[:16])
 	copy(session.requestBodyIV[:], randomBytes[16:32])
 	session.responseHeader = randomBytes[32]
-	if !session.isAEADRequest {
+
+	if !session.isAEAD {
 		session.responseBodyKey = md5.Sum(session.requestBodyKey[:])
 		session.responseBodyIV = md5.Sum(session.requestBodyIV[:])
 	} else {
@@ -82,15 +69,13 @@ func NewClientSession(idHash protocol.IDHash, ctx context.Context) *ClientSessio
 		copy(session.responseBodyIV[:], BodyIV[:16])
 	}
 
-	session.idHash = idHash
-
 	return session
 }
 
 func (c *ClientSession) EncodeRequestHeader(header *protocol.RequestHeader, writer io.Writer) error {
 	timestamp := protocol.NewTimestampGenerator(protocol.NowTime(), 30)()
 	account := header.User.Account.(*vmess.MemoryAccount)
-	if !c.isAEADRequest {
+	if !c.isAEAD {
 		idHash := c.idHash(account.AnyValidID().Bytes())
 		common.Must2(serial.WriteUint64(idHash, uint64(timestamp)))
 		common.Must2(writer.Write(idHash.Sum(nil)))
@@ -105,8 +90,8 @@ func (c *ClientSession) EncodeRequestHeader(header *protocol.RequestHeader, writ
 	common.Must(buffer.WriteByte(c.responseHeader))
 	common.Must(buffer.WriteByte(byte(header.Option)))
 
-	padingLen := dice.Roll(16)
-	security := byte(padingLen<<4) | byte(header.Security)
+	paddingLen := dice.Roll(16)
+	security := byte(paddingLen<<4) | byte(header.Security)
 	common.Must2(buffer.Write([]byte{security, byte(0), byte(header.Command)}))
 
 	if header.Command != protocol.RequestCommandMux {
@@ -115,8 +100,8 @@ func (c *ClientSession) EncodeRequestHeader(header *protocol.RequestHeader, writ
 		}
 	}
 
-	if padingLen > 0 {
-		common.Must2(buffer.ReadFullFrom(rand.Reader, int32(padingLen)))
+	if paddingLen > 0 {
+		common.Must2(buffer.ReadFullFrom(rand.Reader, int32(paddingLen)))
 	}
 
 	{
@@ -126,9 +111,9 @@ func (c *ClientSession) EncodeRequestHeader(header *protocol.RequestHeader, writ
 		fnv1a.Sum(hashBytes[:0])
 	}
 
-	if !c.isAEADRequest {
+	if !c.isAEAD {
 		iv := hashTimestamp(md5.New(), timestamp)
-		aesStream := crypto.NewAesEncryptionStream(account.ID.CmdKey(), iv[:])
+		aesStream := crypto.NewAesEncryptionStream(account.ID.CmdKey(), iv)
 		aesStream.XORKeyStream(buffer.Bytes(), buffer.Bytes())
 		common.Must2(writer.Write(buffer.Bytes()))
 	} else {
@@ -203,12 +188,12 @@ func (c *ClientSession) EncodeRequestBody(request *protocol.RequestHeader, write
 }
 
 func (c *ClientSession) DecodeResponseHeader(reader io.Reader) (*protocol.ResponseHeader, error) {
-	if !c.isAEADRequest {
+	if !c.isAEAD {
 		aesStream := crypto.NewAesDecryptionStream(c.responseBodyKey[:], c.responseBodyIV[:])
 		c.responseReader = crypto.NewCryptionReader(aesStream, reader)
 	} else {
-		aeadResponseHeaderLengthEncryptionKey := vmessaead.KDF16(c.responseBodyKey[:], vmessaead.KDFSaltConst_AEADRespHeaderLenKey)
-		aeadResponseHeaderLengthEncryptionIV := vmessaead.KDF(c.responseBodyIV[:], vmessaead.KDFSaltConst_AEADRespHeaderLenIV)[:12]
+		aeadResponseHeaderLengthEncryptionKey := vmessaead.KDF16(c.responseBodyKey[:], vmessaead.KDFSaltConstAEADRespHeaderLenKey)
+		aeadResponseHeaderLengthEncryptionIV := vmessaead.KDF(c.responseBodyIV[:], vmessaead.KDFSaltConstAEADRespHeaderLenIV)[:12]
 
 		aeadResponseHeaderLengthEncryptionKeyAESBlock := common.Must2(aes.NewCipher(aeadResponseHeaderLengthEncryptionKey)).(cipher.Block)
 		aeadResponseHeaderLengthEncryptionAEAD := common.Must2(cipher.NewGCM(aeadResponseHeaderLengthEncryptionKeyAESBlock)).(cipher.AEAD)
@@ -222,13 +207,13 @@ func (c *ClientSession) DecodeResponseHeader(reader io.Reader) (*protocol.Respon
 		}
 		if decryptedResponseHeaderLengthBinaryBuffer, err := aeadResponseHeaderLengthEncryptionAEAD.Open(nil, aeadResponseHeaderLengthEncryptionIV, aeadEncryptedResponseHeaderLength[:], nil); err != nil {
 			return nil, newError("Failed To Decrypt Length").Base(err)
-		} else {
+		} else { // nolint: golint
 			common.Must(binary.Read(bytes.NewReader(decryptedResponseHeaderLengthBinaryBuffer), binary.BigEndian, &decryptedResponseHeaderLengthBinaryDeserializeBuffer))
 			decryptedResponseHeaderLength = int(decryptedResponseHeaderLengthBinaryDeserializeBuffer)
 		}
 
-		aeadResponseHeaderPayloadEncryptionKey := vmessaead.KDF16(c.responseBodyKey[:], vmessaead.KDFSaltConst_AEADRespHeaderPayloadKey)
-		aeadResponseHeaderPayloadEncryptionIV := vmessaead.KDF(c.responseBodyIV[:], vmessaead.KDFSaltConst_AEADRespHeaderPayloadIV)[:12]
+		aeadResponseHeaderPayloadEncryptionKey := vmessaead.KDF16(c.responseBodyKey[:], vmessaead.KDFSaltConstAEADRespHeaderPayloadKey)
+		aeadResponseHeaderPayloadEncryptionIV := vmessaead.KDF(c.responseBodyIV[:], vmessaead.KDFSaltConstAEADRespHeaderPayloadIV)[:12]
 
 		aeadResponseHeaderPayloadEncryptionKeyAESBlock := common.Must2(aes.NewCipher(aeadResponseHeaderPayloadEncryptionKey)).(cipher.Block)
 		aeadResponseHeaderPayloadEncryptionAEAD := common.Must2(cipher.NewGCM(aeadResponseHeaderPayloadEncryptionKeyAESBlock)).(cipher.AEAD)
@@ -241,7 +226,7 @@ func (c *ClientSession) DecodeResponseHeader(reader io.Reader) (*protocol.Respon
 
 		if decryptedResponseHeaderBuffer, err := aeadResponseHeaderPayloadEncryptionAEAD.Open(nil, aeadResponseHeaderPayloadEncryptionIV, encryptedResponseHeaderBuffer, nil); err != nil {
 			return nil, newError("Failed To Decrypt Payload").Base(err)
-		} else {
+		} else { // nolint: golint
 			c.responseReader = bytes.NewReader(decryptedResponseHeaderBuffer)
 		}
 	}
@@ -274,7 +259,7 @@ func (c *ClientSession) DecodeResponseHeader(reader io.Reader) (*protocol.Respon
 			header.Command = command
 		}
 	}
-	if c.isAEADRequest {
+	if c.isAEAD {
 		aesStream := crypto.NewAesDecryptionStream(c.responseBodyKey[:], c.responseBodyIV[:])
 		c.responseReader = crypto.NewCryptionReader(aesStream, reader)
 	}
