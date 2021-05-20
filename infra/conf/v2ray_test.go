@@ -7,26 +7,27 @@ import (
 
 	"github.com/golang/protobuf/proto"
 	"github.com/google/go-cmp/cmp"
-	"v2ray.com/core"
-	"v2ray.com/core/app/dispatcher"
-	"v2ray.com/core/app/log"
-	"v2ray.com/core/app/proxyman"
-	"v2ray.com/core/app/router"
-	"v2ray.com/core/common"
-	clog "v2ray.com/core/common/log"
-	"v2ray.com/core/common/net"
-	"v2ray.com/core/common/protocol"
-	"v2ray.com/core/common/serial"
-	. "v2ray.com/core/infra/conf"
-	"v2ray.com/core/proxy/blackhole"
-	dns_proxy "v2ray.com/core/proxy/dns"
-	"v2ray.com/core/proxy/freedom"
-	"v2ray.com/core/proxy/vmess"
-	"v2ray.com/core/proxy/vmess/inbound"
-	"v2ray.com/core/transport/internet"
-	"v2ray.com/core/transport/internet/http"
-	"v2ray.com/core/transport/internet/tls"
-	"v2ray.com/core/transport/internet/websocket"
+
+	core "github.com/v2fly/v2ray-core/v4"
+	"github.com/v2fly/v2ray-core/v4/app/dispatcher"
+	"github.com/v2fly/v2ray-core/v4/app/log"
+	"github.com/v2fly/v2ray-core/v4/app/proxyman"
+	"github.com/v2fly/v2ray-core/v4/app/router"
+	"github.com/v2fly/v2ray-core/v4/common"
+	clog "github.com/v2fly/v2ray-core/v4/common/log"
+	"github.com/v2fly/v2ray-core/v4/common/net"
+	"github.com/v2fly/v2ray-core/v4/common/protocol"
+	"github.com/v2fly/v2ray-core/v4/common/serial"
+	. "github.com/v2fly/v2ray-core/v4/infra/conf"
+	"github.com/v2fly/v2ray-core/v4/proxy/blackhole"
+	dns_proxy "github.com/v2fly/v2ray-core/v4/proxy/dns"
+	"github.com/v2fly/v2ray-core/v4/proxy/freedom"
+	"github.com/v2fly/v2ray-core/v4/proxy/vmess"
+	"github.com/v2fly/v2ray-core/v4/proxy/vmess/inbound"
+	"github.com/v2fly/v2ray-core/v4/transport/internet"
+	"github.com/v2fly/v2ray-core/v4/transport/internet/http"
+	"github.com/v2fly/v2ray-core/v4/transport/internet/tls"
+	"github.com/v2fly/v2ray-core/v4/transport/internet/websocket"
 )
 
 func TestV2RayConfig(t *testing.T) {
@@ -379,7 +380,8 @@ func TestConfig_Override(t *testing.T) {
 		fn   string
 		want *Config
 	}{
-		{"combine/empty",
+		{
+			"combine/empty",
 			&Config{},
 			&Config{
 				LogConfig:    &LogConfig{},
@@ -403,40 +405,54 @@ func TestConfig_Override(t *testing.T) {
 				Reverse:      &ReverseConfig{},
 			},
 		},
-		{"combine/newattr",
+		{
+			"combine/newattr",
 			&Config{InboundConfigs: []InboundDetourConfig{{Tag: "old"}}},
 			&Config{LogConfig: &LogConfig{}}, "",
-			&Config{LogConfig: &LogConfig{}, InboundConfigs: []InboundDetourConfig{{Tag: "old"}}}},
-		{"replace/inbounds",
+			&Config{LogConfig: &LogConfig{}, InboundConfigs: []InboundDetourConfig{{Tag: "old"}}},
+		},
+		{
+			"replace/inbounds",
 			&Config{InboundConfigs: []InboundDetourConfig{{Tag: "pos0"}, {Protocol: "vmess", Tag: "pos1"}}},
 			&Config{InboundConfigs: []InboundDetourConfig{{Tag: "pos1", Protocol: "kcp"}}},
 			"",
-			&Config{InboundConfigs: []InboundDetourConfig{{Tag: "pos0"}, {Tag: "pos1", Protocol: "kcp"}}}},
-		{"replace/inbounds-replaceall",
+			&Config{InboundConfigs: []InboundDetourConfig{{Tag: "pos0"}, {Tag: "pos1", Protocol: "kcp"}}},
+		},
+		{
+			"replace/inbounds-replaceall",
 			&Config{InboundConfigs: []InboundDetourConfig{{Tag: "pos0"}, {Protocol: "vmess", Tag: "pos1"}}},
 			&Config{InboundConfigs: []InboundDetourConfig{{Tag: "pos1", Protocol: "kcp"}, {Tag: "pos2", Protocol: "kcp"}}},
 			"",
-			&Config{InboundConfigs: []InboundDetourConfig{{Tag: "pos1", Protocol: "kcp"}, {Tag: "pos2", Protocol: "kcp"}}}},
-		{"replace/notag-append",
+			&Config{InboundConfigs: []InboundDetourConfig{{Tag: "pos1", Protocol: "kcp"}, {Tag: "pos2", Protocol: "kcp"}}},
+		},
+		{
+			"replace/notag-append",
 			&Config{InboundConfigs: []InboundDetourConfig{{}, {Protocol: "vmess"}}},
 			&Config{InboundConfigs: []InboundDetourConfig{{Tag: "pos1", Protocol: "kcp"}}},
 			"",
-			&Config{InboundConfigs: []InboundDetourConfig{{}, {Protocol: "vmess"}, {Tag: "pos1", Protocol: "kcp"}}}},
-		{"replace/outbounds",
+			&Config{InboundConfigs: []InboundDetourConfig{{}, {Protocol: "vmess"}, {Tag: "pos1", Protocol: "kcp"}}},
+		},
+		{
+			"replace/outbounds",
 			&Config{OutboundConfigs: []OutboundDetourConfig{{Tag: "pos0"}, {Protocol: "vmess", Tag: "pos1"}}},
 			&Config{OutboundConfigs: []OutboundDetourConfig{{Tag: "pos1", Protocol: "kcp"}}},
 			"",
-			&Config{OutboundConfigs: []OutboundDetourConfig{{Tag: "pos0"}, {Tag: "pos1", Protocol: "kcp"}}}},
-		{"replace/outbounds-prepend",
+			&Config{OutboundConfigs: []OutboundDetourConfig{{Tag: "pos0"}, {Tag: "pos1", Protocol: "kcp"}}},
+		},
+		{
+			"replace/outbounds-prepend",
 			&Config{OutboundConfigs: []OutboundDetourConfig{{Tag: "pos0"}, {Protocol: "vmess", Tag: "pos1"}}},
 			&Config{OutboundConfigs: []OutboundDetourConfig{{Tag: "pos1", Protocol: "kcp"}, {Tag: "pos2", Protocol: "kcp"}}},
 			"config.json",
-			&Config{OutboundConfigs: []OutboundDetourConfig{{Tag: "pos1", Protocol: "kcp"}, {Tag: "pos2", Protocol: "kcp"}}}},
-		{"replace/outbounds-append",
+			&Config{OutboundConfigs: []OutboundDetourConfig{{Tag: "pos1", Protocol: "kcp"}, {Tag: "pos2", Protocol: "kcp"}}},
+		},
+		{
+			"replace/outbounds-append",
 			&Config{OutboundConfigs: []OutboundDetourConfig{{Tag: "pos0"}, {Protocol: "vmess", Tag: "pos1"}}},
 			&Config{OutboundConfigs: []OutboundDetourConfig{{Tag: "pos2", Protocol: "kcp"}}},
 			"config_tail.json",
-			&Config{OutboundConfigs: []OutboundDetourConfig{{Tag: "pos0"}, {Protocol: "vmess", Tag: "pos1"}, {Tag: "pos2", Protocol: "kcp"}}}},
+			&Config{OutboundConfigs: []OutboundDetourConfig{{Tag: "pos0"}, {Protocol: "vmess", Tag: "pos1"}, {Tag: "pos2", Protocol: "kcp"}}},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 	"io"
 	"sync"
 
-	"v2ray.com/core/common"
+	"github.com/v2fly/v2ray-core/v4/common"
 )
 
 const (
@@ -133,13 +133,11 @@ func Inverse(b []byte) []byte {
 	return b2
 }
 
-var (
-	authPool = sync.Pool{
-		New: func() interface{} {
-			return new(Authentication)
-		},
-	}
-)
+var authPool = sync.Pool{
+	New: func() interface{} {
+		return new(Authentication)
+	},
+}
 
 func getAuthenticationObject() *Authentication {
 	return authPool.Get().(*Authentication)
